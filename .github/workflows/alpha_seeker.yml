@@ -1,0 +1,37 @@
+name: Alpha Seeker 자동화
+
+on:
+  schedule:
+    # 매일 오전 6시 (한국시간)
+    - cron: '0 21 * * 0-4'  
+    # 매일 오후 10시 (한국시간)
+    - cron: '0 13 * * 1-5'
+  workflow_dispatch:  # 수동 실행
+
+jobs:
+  alpha_seeker:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 코드 가져오기
+      uses: actions/checkout@v4
+    
+    - name: Python 설정
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: 라이브러리 설치
+      run: |
+        pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Alpha Seeker 실행
+      env:
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+        ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+        PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
+      run: |
+        python main.py
