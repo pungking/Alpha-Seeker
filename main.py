@@ -86,7 +86,7 @@ class AlphaSeeker:
     
     def analyze_stock_signals(self, stock_data):
         """간단하지만 효과적인 신호 생성"""
-        if not stock_
+        if not stock_data:
             return None
             
         signals = []
