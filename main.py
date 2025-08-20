@@ -172,7 +172,7 @@ class AlphaSeeker:
             print(f"진행률: {i}/{len(watchlist)}")
             
             stock_data = self.safe_get_stock_data(symbol)
-            if stock_
+            if stock_data:
                 analyzed_stock = self.analyze_stock_signals(stock_data)
                 if analyzed_stock and analyzed_stock['signals']:
                     analyzed_stocks.append(analyzed_stock)
