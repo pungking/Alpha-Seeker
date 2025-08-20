@@ -1,4 +1,4 @@
-name: Alpha Seeker v4.3 완전 자동화
+name: Alpha Seeker v4.3 안정화 자동화
 
 on:
   schedule:
@@ -19,15 +19,13 @@ jobs:
       uses: actions/setup-python@v4
       with:
         python-version: '3.11'
-    - name: 의존성 설치
+    - name: 의존성 설치 (안정화)
       run: |
         pip install --upgrade pip
         pip install -r requirements.txt
-    - name: Alpha Seeker v4.3 실행
+    - name: Alpha Seeker v4.3 안정화 실행
       env:
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
-        ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
         PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
       run: python main.py
