@@ -242,7 +242,7 @@ class TechnicalAnalyzer:
         try:
             # 1. 데이터 수집
             stock_data = self.get_stock_data(ticker)
-            if not stock_
+            if not stock_data:
                 return None
             
             hist = stock_data['history']
