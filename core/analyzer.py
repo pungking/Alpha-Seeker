@@ -6,7 +6,7 @@ from .technical import TechnicalAnalyzer
 from .data_manager import DataManager
 from .telegram_bot import TelegramBot
 from .report_generator import MorningReportGenerator, EveningReportGenerator, SundayReportGenerator
-from utils.stock_utils import StockTickerManager
+from utils.stock_utils import StockTickerManagers
 
 load_dotenv()
 
@@ -98,29 +98,6 @@ class AlphaSeeker:
             print(f"❌ Perplexity 분석 오류: {e}")
             return None
     
-    def send_api_key_required_message(self):
-        """API 키 필요 메시지 전송"""
-        error_message = f"""
-🚨 **Alpha Seeker 분석 중단**
-📅 {datetime.now().strftime('%Y-%m-%d %H:%M')} (KST)
-
-❌ **Perplexity API 키 없음**
-AI 기반 실시간 종목 분석을 위해서는 API 키가 필요합니다.
-
-🔧 **해결 방법**:
-1. https://www.perplexity.ai/settings/api 에서 API 키 발급
-2. .env 파일에 `PERPLEXITY_API_KEY=발급받은키` 추가
-3. 또는 GitHub Secrets에 키 등록
-
-⚠️ **중요**: API 키 없이는 가짜 데이터를 제공하지 않습니다.
-실제 투자 결정에 도움이 되는 정확한 분석만 제공합니다.
-
-⏰ **다음 분석**: API 키 설정 후 자동 재개
-🤖 Alpha Seeker v4.3 - 정직한 분석 시스템
-"""
-        
-        return self.telegram_bot.send_message(error_message)
-    
     def analyze_extracted_stocks(self, tickers):
         """추출된 종목들 기술적 분석"""
         print(f"📊 {len(tickers)}개 종목 기술적 분석 시작...")
@@ -162,19 +139,33 @@ AI 기반 실시간 종목 분석을 위해서는 API 키가 필요합니다.
             ai_result = self.get_perplexity_analysis()
             if not ai_result:
                 print("❌ Perplexity AI 분석 실패 - API 키 필요 메시지 전송")
-                self.send_api_key_required_message()
+                error_msg = f"""
+🚨 Alpha Seeker 분석 중단
+📅 {datetime.now().strftime('%Y-%m-%d %H:%M')} (KST)
+
+❌ Perplexity API 키 없음
+AI 기반 실시간 종목 분석을 위해서는 API 키가 필요합니다.
+
+🔧 해결 방법:
+1. https://www.perplexity.ai/settings/api 에서 API 키 발급
+2. .env 파일에 PERPLEXITY_API_KEY=발급받은키 추가
+3. 또는 GitHub Secrets에 키 등록
+
+⏰ 다음 분석: API 키 설정 후 자동 재개
+🤖 Alpha Seeker v4.3 - 정직한 분석 시스템
+"""
+                self.telegram_bot.send_message(error_msg)
                 return False
             
             if not ai_result['extracted_tickers']:
                 error_msg = f"""
-🌅 **Alpha Seeker 오전 분석**
+🌅 Alpha Seeker 오전 분석
 📅 {datetime.now().strftime('%Y-%m-%d %H:%M')} (KST)
 
-⚠️ **유효한 종목 발견 안됨**
+⚠️ 유효한 종목 발견 안됨
 AI 분석은 완료되었으나 투자 가능한 종목을 찾지 못했습니다.
-시장 상황을 지속 모니터링하겠습니다.
 
-🔄 **다음 분석**: 오후 22:13
+🔄 다음 분석: 오후 22:13
 🤖 Alpha Seeker v4.3
 """
                 self.telegram_bot.send_message(error_msg)
@@ -184,13 +175,13 @@ AI 분석은 완료되었으나 투자 가능한 종목을 찾지 못했습니�
             stock_analysis = self.analyze_extracted_stocks(ai_result['extracted_tickers'])
             if not stock_analysis:
                 error_msg = f"""
-🌅 **Alpha Seeker 오전 분석**
+🌅 Alpha Seeker 오전 분석
 📅 {datetime.now().strftime('%Y-%m-%d %H:%M')} (KST)
 
-⚠️ **기술적 분석 실패**
+⚠️ 기술적 분석 실패
 종목은 추출되었으나 기술적 분석에서 오류가 발생했습니다.
 
-🔄 **다음 분석**: 오후 22:13
+🔄 다음 분석: 오후 22:13
 🤖 Alpha Seeker v4.3
 """
                 self.telegram_bot.send_message(error_msg)
@@ -218,13 +209,13 @@ AI 분석은 완료되었으나 투자 가능한 종목을 찾지 못했습니�
         except Exception as e:
             print(f"❌ 오전 분석 오류: {e}")
             error_msg = f"""
-🌅 **Alpha Seeker 오전 분석 오류**
+🌅 Alpha Seeker 오전 분석 오류
 📅 {datetime.now().strftime('%Y-%m-%d %H:%M')} (KST)
 
-❌ **시스템 오류**
+❌ 시스템 오류
 {str(e)}
 
-🔄 **다음 분석**: 오후 22:13
+🔄 다음 분석: 오후 22:13
 🤖 Alpha Seeker v4.3
 """
             self.telegram_bot.send_message(error_msg)
@@ -237,16 +228,15 @@ AI 분석은 완료되었으나 투자 가능한 종목을 찾지 못했습니�
         try:
             # 1. 오전 데이터 로드
             morning_data = self.data_manager.load_morning_data()
-            if not morning_data:
-                
+            if not morning_
                 error_msg = f"""
-🌙 **Alpha Seeker 프리마켓 분석**
+🌙 Alpha Seeker 프리마켓 분석
 📅 {datetime.now().strftime('%Y-%m-%d %H:%M')} (KST)
 
-⚠️ **오전 데이터 없음**
+⚠️ 오전 데이터 없음
 재검토할 오전 추천 종목이 없습니다.
 
-🔄 **다음 분석**: 내일 06:07
+🔄 다음 분석: 내일 06:07
 🤖 Alpha Seeker v4.3
 """
                 self.telegram_bot.send_message(error_msg)
@@ -255,13 +245,13 @@ AI 분석은 완료되었으나 투자 가능한 종목을 찾지 못했습니�
             morning_stocks = morning_data.get('stock_analysis', {})
             if not morning_stocks:
                 error_msg = f"""
-🌙 **Alpha Seeker 프리마켓 분석**
+🌙 Alpha Seeker 프리마켓 분석
 📅 {datetime.now().strftime('%Y-%m-%d %H:%M')} (KST)
 
-⚠️ **오전 추천 종목 없음**
+⚠️ 오전 추천 종목 없음
 재검토할 데이터가 없습니다.
 
-🔄 **다음 분석**: 내일 06:07
+🔄 다음 분석: 내일 06:07
 🤖 Alpha Seeker v4.3
 """
                 self.telegram_bot.send_message(error_msg)
@@ -287,13 +277,13 @@ AI 분석은 완료되었으나 투자 가능한 종목을 찾지 못했습니�
         except Exception as e:
             print(f"❌ 저녁 재검토 오류: {e}")
             error_msg = f"""
-🌙 **Alpha Seeker 프리마켓 재검토 오류**
+🌙 Alpha Seeker 프리마켓 재검토 오류
 📅 {datetime.now().strftime('%Y-%m-%d %H:%M')} (KST)
 
-❌ **시스템 오류**
+❌ 시스템 오류
 {str(e)}
 
-🔄 **다음 분석**: 내일 06:07
+🔄 다음 분석: 내일 06:07
 🤖 Alpha Seeker v4.3
 """
             self.telegram_bot.send_message(error_msg)
@@ -332,74 +322,4 @@ AI 분석은 완료되었으나 투자 가능한 종목을 찾지 못했습니�
             # 큰 갭 발생
             if abs(gap_pct) > 7:
                 should_maintain = False
-                removal_reason = f"큰 갭 발생 ({gap_pct:+.1f}%)"
-            
-            # 기술적 점수 하락
-            elif current_analysis.get('score', 0) < 4:
-                should_maintain = False
-                removal_reason = f"기술점수 하락 ({current_analysis.get('score', 0)}/10)"
-            
-            # 부정적 신호 증가
-            elif any("데드크로스" in str(signal) for signal in current_analysis.get('signals', [])):
-                should_maintain = False
-                removal_reason = "부정적 기술적 신호"
-            
-            # 결과 기록
-            recheck_results[ticker] = {
-                **current_analysis,
-                'morning_price': morning_price,
-                'gap_pct': round(gap_pct, 1),
-                'maintain': should_maintain,
-                'removal_reason': removal_reason
-            }
-            
-            if should_maintain:
-                maintained.append(ticker)
-            else:
-                removed.append((ticker, removal_reason))
-        
-        return {
-            'maintained': maintained,
-            'removed': removed,
-            'detailed_analysis': recheck_results,
-            'morning_total': len(morning_stocks),
-            'timestamp': datetime.now().isoformat()
-        }
-    
-    def run_sunday_analysis(self):
-        """일요일 주간 분석"""
-        print("📊 일요일 주간 전략 분석")
-        
-        try:
-            sunday_data = {
-                'analysis_type': 'weekly_strategy',
-                'timestamp': datetime.now().isoformat()
-            }
-            
-            report = self.sunday_generator.generate(sunday_data)
-            success = self.telegram_bot.send_message(report)
-            
-            if success:
-                print("🎉 일요일 주간 분석 완료")
-            
-            return success
-            
-        except Exception as e:
-            print(f"❌ 일요일 분석 오류: {e}")
-            return False
-    
-    def run(self, analysis_type):
-        """메인 실행 메서드"""
-        print(f"🎯 Alpha Seeker 분석 시작: {analysis_type}")
-        
-        if analysis_type == "morning_analysis":
-            return self.run_morning_analysis()
-        elif analysis_type == "pre_market_analysis":
-            return self.run_evening_recheck()
-        elif analysis_type == "sunday_analysis":
-            return self.run_sunday_analysis()
-        else:
-            print("⏰ 정규 분석 시간이 아닙니다")
-            return False
-
-print("✅ AlphaSeeker 메인 엔진 모듈 로드 완료")
+                removal_reason = f"큰 갭 발
