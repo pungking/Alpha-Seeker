@@ -228,7 +228,7 @@ AI 분석은 완료되었으나 투자 가능한 종목을 찾지 못했습니�
         try:
             # 1. 오전 데이터 로드
             morning_data = self.data_manager.load_morning_data()
-            if not morning_
+            if not morning_data:
                 error_msg = f"""
 🌙 Alpha Seeker 프리마켓 분석
 📅 {datetime.now().strftime('%Y-%m-%d %H:%M')} (KST)
