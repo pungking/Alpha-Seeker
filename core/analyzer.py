@@ -6,7 +6,7 @@ from .technical import TechnicalAnalyzer
 from .data_manager import DataManager
 from .telegram_bot import TelegramBot
 from .report_generator import MorningReportGenerator, EveningReportGenerator, SundayReportGenerator
-from utils.stock_utils import StockTickerManagers
+from utils.stock_utils import StockTickerManager
 
 load_dotenv()
 
@@ -322,4 +322,74 @@ AI 분석은 완료되었으나 투자 가능한 종목을 찾지 못했습니�
             # 큰 갭 발생
             if abs(gap_pct) > 7:
                 should_maintain = False
-                removal_reason = f"큰 갭 발
+                removal_reason = f"큰 갭 발생 ({gap_pct:+.1f}%)"
+            
+            # 기술적 점수 하락
+            elif current_analysis.get('score', 0) < 4:
+                should_maintain = False
+                removal_reason = f"기술점수 하락 ({current_analysis.get('score', 0)}/10)"
+            
+            # 부정적 신호 증가
+            elif any("데드크로스" in str(signal) for signal in current_analysis.get('signals', [])):
+                should_maintain = False
+                removal_reason = "부정적 기술적 신호"
+            
+            # 결과 기록
+            recheck_results[ticker] = {
+                **current_analysis,
+                'morning_price': morning_price,
+                'gap_pct': round(gap_pct, 1),
+                'maintain': should_maintain,
+                'removal_reason': removal_reason
+            }
+            
+            if should_maintain:
+                maintained.append(ticker)
+            else:
+                removed.append((ticker, removal_reason))
+        
+        return {
+            'maintained': maintained,
+            'removed': removed,
+            'detailed_analysis': recheck_results,
+            'morning_total': len(morning_stocks),
+            'timestamp': datetime.now().isoformat()
+        }
+    
+    def run_sunday_analysis(self):
+        """일요일 주간 분석"""
+        print("📊 일요일 주간 전략 분석")
+        
+        try:
+            sunday_data = {
+                'analysis_type': 'weekly_strategy',
+                'timestamp': datetime.now().isoformat()
+            }
+            
+            report = self.sunday_generator.generate(sunday_data)
+            success = self.telegram_bot.send_message(report)
+            
+            if success:
+                print("🎉 일요일 주간 분석 완료")
+            
+            return success
+            
+        except Exception as e:
+            print(f"❌ 일요일 분석 오류: {e}")
+            return False
+    
+    def run(self, analysis_type):
+        """메인 실행 메서드"""
+        print(f"🎯 Alpha Seeker 분석 시작: {analysis_type}")
+        
+        if analysis_type == "morning_analysis":
+            return self.run_morning_analysis()
+        elif analysis_type == "pre_market_analysis":
+            return self.run_evening_recheck()
+        elif analysis_type == "sunday_analysis":
+            return self.run_sunday_analysis()
+        else:
+            print("⏰ 정규 분석 시간이 아닙니다")
+            return False
+
+print("✅ AlphaSeeker 메인 엔진 안정화")
