@@ -82,7 +82,7 @@ class AlphaSeeker:
         ]
         
         # 랜덤 변동 추가 (실제 시장 반영)
-        for stock in stocks_
+        for stock in stocks_data:
             variation = random.uniform(-2, 2)
             stock['price'] = round(stock['price'] + variation, 2)
             stock['change_pct'] = round(stock['change_pct'] + (variation * 0.5), 1)
