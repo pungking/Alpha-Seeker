@@ -3,7 +3,6 @@ import time
 import threading
 from datetime import datetime, timedelta
 import logging
-import os
 
 class RealtimeRiskMonitor:
     def __init__(self, telegram_bot, portfolio_tickers):
@@ -68,7 +67,7 @@ class RealtimeRiskMonitor:
                 time.sleep(120)
     
     def _analyze_ticker_risk(self, ticker):
-        """개별 종목 위험 분석"""
+        """개별 종목 위험 분석 (긴급 매수/매도 신호 통합)"""
         alerts = []
         
         try:
@@ -97,7 +96,7 @@ class RealtimeRiskMonitor:
                 })
             elif gap_pct <= self.risk_thresholds['gap_down']:
                 alerts.append({
-                    'type': 'URGENT',
+                    'type': 'URGENT_SELL',
                     'ticker': ticker,
                     'alert': 'GAP_DOWN',
                     'value': gap_pct * 100,
@@ -105,30 +104,30 @@ class RealtimeRiskMonitor:
                 })
             elif gap_pct >= self.risk_thresholds['gap_up']:
                 alerts.append({
-                    'type': 'URGENT',
+                    'type': 'URGENT_BUY',
                     'ticker': ticker,
                     'alert': 'GAP_UP',
                     'value': gap_pct * 100,
-                    'message': f"{ticker} 급등 발생: {gap_pct*100:+.1f}% (버블 주의)"
+                    'message': f"{ticker} 급등 발생: {gap_pct*100:+.1f}% (매수 기회 또는 버블 주의)"
                 })
             
             # 2. RSI 극단값 검사
             rsi = self._calculate_rsi(data_1h['Close'])
             if rsi <= self.risk_thresholds['rsi_oversold']:
                 alerts.append({
-                    'type': 'URGENT',
+                    'type': 'URGENT_BUY',
                     'ticker': ticker,
                     'alert': 'RSI_OVERSOLD',
                     'value': rsi,
-                    'message': f"{ticker} RSI 과매도: {rsi:.1f} (반등 가능성)"
+                    'message': f"{ticker} RSI 과매도: {rsi:.1f} (매수 기회)"
                 })
             elif rsi >= self.risk_thresholds['rsi_overbought']:
                 alerts.append({
-                    'type': 'WARNING',
+                    'type': 'URGENT_SELL',
                     'ticker': ticker,
                     'alert': 'RSI_OVERBOUGHT',
                     'value': rsi,
-                    'message': f"{ticker} RSI 과매수: {rsi:.1f} (조정 위험)"
+                    'message': f"{ticker} RSI 과매수: {rsi:.1f} (매도 신호)"
                 })
             
             # 3. 거래량 이상 검사
@@ -139,13 +138,30 @@ class RealtimeRiskMonitor:
                 volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1
                 
                 if volume_ratio >= self.risk_thresholds['volume_spike']:
-                    alerts.append({
-                        'type': 'URGENT',
-                        'ticker': ticker,
-                        'alert': 'VOLUME_SPIKE',
-                        'value': volume_ratio,
-                        'message': f"{ticker} 거래량 급증: {volume_ratio:.1f}배 (기관 매물 의혹)"
-                    })
+                    if gap_pct > 0.02:  # 상승과 함께
+                        alerts.append({
+                            'type': 'URGENT_BUY',
+                            'ticker': ticker,
+                            'alert': 'VOLUME_SPIKE_UP',
+                            'value': volume_ratio,
+                            'message': f"{ticker} 상승 + 거래량 급증: {volume_ratio:.1f}배 (강력한 매수 신호)"
+                        })
+                    elif gap_pct < -0.02:  # 하락과 함께
+                        alerts.append({
+                            'type': 'URGENT_SELL',
+                            'ticker': ticker,
+                            'alert': 'VOLUME_SPIKE_DOWN',
+                            'value': volume_ratio,
+                            'message': f"{ticker} 하락 + 거래량 급증: {volume_ratio:.1f}배 (강력한 매도 신호)"
+                        })
+                    else:
+                        alerts.append({
+                            'type': 'WARNING',
+                            'ticker': ticker,
+                            'alert': 'VOLUME_SPIKE',
+                            'value': volume_ratio,
+                            'message': f"{ticker} 거래량 급증: {volume_ratio:.1f}배 (주의깊게 관찰)"
+                        })
                 elif volume_ratio <= self.risk_thresholds['volume_dry']:
                     alerts.append({
                         'type': 'WARNING',
@@ -165,7 +181,7 @@ class RealtimeRiskMonitor:
                 
                 if support_break <= self.risk_thresholds['support_break']:
                     alerts.append({
-                        'type': 'URGENT',
+                        'type': 'URGENT_SELL',
                         'ticker': ticker,
                         'alert': 'SUPPORT_BREAK',
                         'value': support_break * 100,
@@ -174,11 +190,42 @@ class RealtimeRiskMonitor:
                 
                 elif resistance_break >= self.risk_thresholds['resistance_break']:
                     alerts.append({
-                        'type': 'WARNING',
+                        'type': 'URGENT_BUY',
                         'ticker': ticker,
                         'alert': 'RESISTANCE_BREAK',
                         'value': resistance_break * 100,
                         'message': f"{ticker} 20일선 돌파: {resistance_break*100:+.1f}% (상승 모멘텀)"
+                    })
+            
+            # 5. 추가 기술적 분석 기반 신호 (간단 버전)
+            if len(data_1h) >= 24:  # 24시간 이상 데이터
+                ema_12 = data_1h['Close'].ewm(span=12).mean()
+                ema_26 = data_1h['Close'].ewm(span=26).mean()
+                
+                # 현재와 이전 EMA 크로스오버 감지
+                current_ema12 = ema_12.iloc[-1]
+                current_ema26 = ema_26.iloc[-1]
+                prev_ema12 = ema_12.iloc[-2]
+                prev_ema26 = ema_26.iloc[-2]
+                
+                # 골든크로스 감지
+                if current_ema12 > current_ema26 and prev_ema12 <= prev_ema26:
+                    alerts.append({
+                        'type': 'URGENT_BUY',
+                        'ticker': ticker,
+                        'alert': 'GOLDEN_CROSS',
+                        'value': (current_ema12 - current_ema26) / current_ema26 * 100,
+                        'message': f"{ticker} EMA 골든크로스 발생 (강력한 매수 신호)"
+                    })
+                
+                # 데드크로스 감지
+                elif current_ema12 < current_ema26 and prev_ema12 >= prev_ema26:
+                    alerts.append({
+                        'type': 'URGENT_SELL',
+                        'ticker': ticker,
+                        'alert': 'DEATH_CROSS',
+                        'value': (current_ema26 - current_ema12) / current_ema12 * 100,
+                        'message': f"{ticker} EMA 데드크로스 발생 (강력한 매도 신호)"
                     })
             
         except Exception as e:
@@ -212,11 +259,19 @@ class RealtimeRiskMonitor:
                             })
                         elif change_pct <= -1.5:  # 1.5% 이상 하락
                             self._send_urgent_alert({
-                                'type': 'URGENT',
+                                'type': 'URGENT_SELL',
                                 'ticker': ticker,
                                 'alert': 'MARKET_DECLINE',
                                 'value': change_pct,
                                 'message': f"시장 하락 신호: {ticker} {change_pct:+.1f}%"
+                            })
+                        elif change_pct >= 2:  # 2% 이상 상승
+                            self._send_urgent_alert({
+                                'type': 'URGENT_BUY',
+                                'ticker': ticker,
+                                'alert': 'MARKET_RALLY',
+                                'value': change_pct,
+                                'message': f"시장 상승 신호: {ticker} {change_pct:+.1f}%"
                             })
                 
                 time.sleep(600)  # 10분 간격
@@ -241,15 +296,23 @@ class RealtimeRiskMonitor:
                             'ticker': 'VIX',
                             'alert': 'VIX_EXTREME',
                             'value': current_vix,
-                            'message': f"VIX 극도 공포: {current_vix:.1f} (시장 패닉 상태)"
+                            'message': f"VIX 극도 공포: {current_vix:.1f} (시장 패닉 상태 - 매수 기회 가능성)"
                         })
                     elif current_vix >= self.risk_thresholds['vix_spike']:
                         self._send_urgent_alert({
-                            'type': 'URGENT',
+                            'type': 'URGENT_SELL',
                             'ticker': 'VIX',
                             'alert': 'VIX_SPIKE',
                             'value': current_vix,
-                            'message': f"VIX 공포지수 급등: {current_vix:.1f} (변동성 증가)"
+                            'message': f"VIX 공포지수 급등: {current_vix:.1f} (변동성 증가 - 주의 필요)"
+                        })
+                    elif current_vix <= 15:  # VIX 낮음 (시장 안정)
+                        self._send_urgent_alert({
+                            'type': 'INFO',
+                            'ticker': 'VIX',
+                            'alert': 'VIX_LOW',
+                            'value': current_vix,
+                            'message': f"VIX 안정권: {current_vix:.1f} (시장 안정 - 적극적 투자 환경)"
                         })
                 
                 time.sleep(900)  # 15분 간격
@@ -271,7 +334,7 @@ class RealtimeRiskMonitor:
             return 50  # 기본값
     
     def _send_urgent_alert(self, alert):
-        """긴급 알림 전송 (중복 방지)"""
+        """긴급 알림 전송 (긴급 매수/매도 신호 포함)"""
         alert_key = f"{alert['ticker']}_{alert['alert']}"
         current_time = datetime.now()
         
@@ -284,7 +347,7 @@ class RealtimeRiskMonitor:
         # 알림 메시지 생성
         if alert['type'] == 'EMERGENCY':
             message = f"""
-🚨 ALPHA SEEKER 긴급 알림 🚨
+🚨🚨🚨 ALPHA SEEKER 긴급 알림 🚨🚨🚨
 ⏰ {current_time.strftime('%H:%M:%S')} KST
 
 🔥 {alert['message']}
@@ -296,28 +359,46 @@ class RealtimeRiskMonitor:
 • 리스크 관리 강화
 
 📱 즉시 대응 바랍니다!
-🤖 Alpha Seeker v4.3 Enhanced
+🤖 Alpha Seeker v4.3 Enhanced Final
 """
             self.telegram_bot.send_message(message, emergency=True)
             logging.critical(f"긴급 알림 전송: {alert['message']}")
             
-        elif alert['type'] == 'URGENT':
+        elif alert['type'] == 'URGENT_BUY':
             message = f"""
-⚠️ Alpha Seeker 위험 신호 ⚠️
+🟢 긴급 매수 신호 🟢
 ⏰ {current_time.strftime('%H:%M:%S')} KST
 
-📊 {alert['message']}
+✅ {alert['message']}
 
-💡 권고사항:
-• 포지션 크기 조정 검토
-• 손절가 재설정 고려
-• 추가 모니터링 강화
+📊 매수 고려사항:
+• 포지션 크기 신중히 결정
+• 손절가 미리 설정
+• 추가 확인 신호 대기 권장
 
-🔍 주의깊게 관찰 필요
-🤖 Alpha Seeker v4.3 Enhanced
+💰 신중한 매수 검토 바랍니다
+🤖 Alpha Seeker v4.3 Enhanced Final
 """
             self.telegram_bot.send_message(message, urgent=True)
-            logging.warning(f"위험 알림 전송: {alert['message']}")
+            logging.warning(f"긴급 매수 신호: {alert['message']}")
+            
+        elif alert['type'] == 'URGENT_SELL':
+            message = f"""
+🔴 긴급 매도 신호 🔴
+⏰ {current_time.strftime('%H:%M:%S')} KST
+
+⚠️ {alert['message']}
+
+📊 매도 고려사항:
+• 현재 포지션 즉시 점검
+• 손절 또는 부분 매도 고려
+• 추가 하락 위험 대비
+
+💸 신속한 매도 검토 바랍니다
+🤖 Alpha Seeker v4.3 Enhanced Final
+"""
+            self.telegram_bot.send_message(message, urgent=True)
+            logging.warning(f"긴급 매도 신호: {alert['message']}")
             
         elif alert['type'] == 'WARNING':
             message = f"""
@@ -327,10 +408,23 @@ class RealtimeRiskMonitor:
 📈 {alert['message']}
 
 📝 참고사항: 지속적 모니터링 권장
-🤖 Alpha Seeker v4.3 Enhanced
+🤖 Alpha Seeker v4.3 Enhanced Final
 """
             self.telegram_bot.send_message(message)
             logging.info(f"주의 알림 전송: {alert['message']}")
+            
+        elif alert['type'] == 'INFO':
+            message = f"""
+ℹ️ Alpha Seeker 정보 알림
+⏰ {current_time.strftime('%H:%M:%S')} KST
+
+📊 {alert['message']}
+
+📝 시장 환경 참고 정보
+🤖 Alpha Seeker v4.3 Enhanced Final
+"""
+            self.telegram_bot.send_message(message)
+            logging.info(f"정보 알림 전송: {alert['message']}")
         
         # 알림 기록 업데이트
         self.alert_history[alert_key] = current_time
@@ -341,4 +435,4 @@ class RealtimeRiskMonitor:
         print("🛑 실시간 위험 모니터링 중지")
         logging.info("실시간 위험 모니터링 중지")
 
-print("✅ RealtimeRiskMonitor (24시간 실시간 위험 감지)")
+print("✅ RealtimeRiskMonitor Enhanced (24시간 실시간 위험 감지 + 긴급 매수/매도 신호)")

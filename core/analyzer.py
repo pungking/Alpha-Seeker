@@ -7,7 +7,24 @@ from .technical import TechnicalAnalyzer
 from .data_manager import DataManager
 from .telegram_bot import TelegramBot
 from .report_generator import MorningReportGenerator, EveningReportGenerator, SundayReportGenerator
-from .realtime_monitor import RealtimeRiskMonitor
+
+# 조건부 import (에러 방지)
+try:
+    from .realtime_monitor import RealtimeRiskMonitor
+    REALTIME_MONITOR_AVAILABLE = True
+except ImportError as e:
+    print(f"⚠️ 실시간 모니터링 모듈 로드 실패: {e}")
+    RealtimeRiskMonitor = None
+    REALTIME_MONITOR_AVAILABLE = False
+
+try:
+    from .position_estimator import AdvancedPositionEstimator
+    POSITION_ESTIMATOR_AVAILABLE = True
+except ImportError as e:
+    print(f"⚠️ 포지션 예상 모듈 로드 실패: {e}")
+    AdvancedPositionEstimator = None
+    POSITION_ESTIMATOR_AVAILABLE = False
+
 from utils.stock_utils import StockTickerManager
 
 load_dotenv()
@@ -28,15 +45,33 @@ class AlphaSeeker:
         self.evening_generator = EveningReportGenerator()
         self.sunday_generator = SundayReportGenerator()
         
-        # 실시간 모니터링
+        # 실시간 모니터링 (조건부)
         self.realtime_monitor = None
+        self.realtime_monitor_available = REALTIME_MONITOR_AVAILABLE
+        
+        # 포지션 예상 시스템 (조건부 초기화)
+        if POSITION_ESTIMATOR_AVAILABLE:
+            portfolio_capital = float(os.getenv('PORTFOLIO_CAPITAL', 100000))
+            self.position_estimator = AdvancedPositionEstimator(total_capital=portfolio_capital)
+            self.position_estimator_available = True
+        else:
+            self.position_estimator = None
+            self.position_estimator_available = False
         
         # 포트폴리오 관리 설정
-        self.portfolio_balance = 100000  # 기본 포트폴리오 규모
+        self.portfolio_balance = float(os.getenv('PORTFOLIO_CAPITAL', 100000))
         self.max_position_size = 0.15    # 종목당 최대 15%
         self.max_total_exposure = 0.8    # 전체 노출 최대 80%
         
-        print("✅ AlphaSeeker Enhanced Final 메인 엔진 초기화 완료")
+        # 상태 메시지
+        features = []
+        if self.realtime_monitor_available:
+            features.append("실시간 모니터링")
+        if self.position_estimator_available:
+            features.append("포지션 예상")
+        
+        features_str = " + ".join(features) if features else "기본 기능"
+        print(f"✅ AlphaSeeker Enhanced Final ({features_str})")
     
     def check_emergency_conditions(self, evening_result):
         """긴급 상황 감지"""
@@ -52,7 +87,6 @@ class AlphaSeeker:
         
         # 2. 전 종목 제거 (100% 제거)
         maintained_count = len(evening_result.get('maintained', []))
-        removed_count = len(evening_result.get('removed', []))
         
         if maintained_count == 0 and total_count > 0:
             emergency_conditions.append("모든 추천 종목이 제거됨")
@@ -76,20 +110,14 @@ class AlphaSeeker:
         return emergency_conditions
     
     def calculate_position_size(self, ticker, score, confidence=1.0):
-        """신뢰도 기반 포지션 크기 계산"""
+        """기존 포지션 크기 계산 (하위 호환성 유지)"""
         try:
-            # 기본 포지션 크기 (점수 기반)
             base_position = self.max_position_size * (score / 10.0)
-            
-            # 신뢰도 조정
             adjusted_position = base_position * confidence
-            
-            # 절대 최대치 적용
-            final_position = min(adjusted_position, 0.20)  # 절대 최대 20%
-            
+            final_position = min(adjusted_position, 0.20)
             position_value = self.portfolio_balance * final_position
             
-            logging.info(f"{ticker} 포지션 크기: {final_position:.1%} (${position_value:,.0f})")
+            logging.info(f"{ticker} 기본 포지션: {final_position:.1%} (${position_value:,.0f})")
             
             return {
                 'position_pct': final_position,
@@ -101,7 +129,7 @@ class AlphaSeeker:
         except Exception as e:
             logging.error(f"포지션 크기 계산 오류: {e}")
             return {
-                'position_pct': 0.05,  # 기본 5%
+                'position_pct': 0.05,
                 'position_value': self.portfolio_balance * 0.05,
                 'score_factor': 0.5,
                 'confidence_factor': 0.5
@@ -122,24 +150,19 @@ class AlphaSeeker:
             if total_analyzed == 0:
                 return {'risk_level': '데이터 없음', 'risk_score': 50}
             
-            # 리스크 점수 계산
             removal_rate = len(removed) / total_analyzed
             failure_rate = failed_count / total_analyzed
             
-            # 갭 리스크 추가 고려
             detailed_analysis = analysis_result.get('detailed_analysis', {})
             high_gap_count = 0
             for data in detailed_analysis.values():
                 gap_pct = abs(data.get('gap_pct', 0))
-                if gap_pct > 5:  # 5% 이상 갭
+                if gap_pct > 5:
                     high_gap_count += 1
             
             gap_risk = high_gap_count / total_analyzed if total_analyzed > 0 else 0
-            
-            # 종합 리스크 점수
             risk_score = (removal_rate * 0.4 + failure_rate * 0.3 + gap_risk * 0.3) * 100
             
-            # 리스크 등급 결정
             if risk_score <= 15:
                 risk_level = "🟢 저위험"
             elif risk_score <= 35:
@@ -163,7 +186,7 @@ class AlphaSeeker:
             return {'risk_level': '계산 오류', 'risk_score': 50}
     
     def get_perplexity_analysis(self):
-        """Perplexity AI 분석 및 종목 추출 (기존 로직 유지)"""
+        """Perplexity AI 분석 및 종목 추출"""
         if not self.perplexity_key:
             print("❌ Perplexity API 키가 설정되지 않았습니다.")
             logging.warning("Perplexity API 키 없음")
@@ -185,9 +208,7 @@ class AlphaSeeker:
                 "messages": [
                     {
                         "role": "system",
-                        "content": """당신은 미국 주식 전문가입니다. 
-현재 시점에서 투자할 만한 구체적인 미국 주식 종목들을 추천해주세요.
-반드시 정확한 티커 심볼과 함께 추천 이유를 제시해주세요."""
+                        "content": "당신은 미국 주식 전문가입니다. 현재 시점에서 투자할 만한 구체적인 미국 주식 종목들을 추천해주세요. 반드시 정확한 티커 심볼과 함께 추천 이유를 제시해주세요."
                     },
                     {
                         "role": "user",
@@ -208,7 +229,7 @@ class AlphaSeeker:
             response = requests.post(url, json=payload, headers=headers, timeout=30)
             
             if response.status_code == 200:
-                content = response.json()['choices'][0]['message']['content']
+                content = response.json()['choices']['message']['content']
                 print("✅ Perplexity AI 분석 완료")
                 logging.info("Perplexity AI 분석 완료")
                 
@@ -236,8 +257,8 @@ class AlphaSeeker:
             return None
     
     def analyze_extracted_stocks(self, tickers):
-        """추출된 종목들 기술적 분석 (포지션 크기 계산 추가)"""
-        print(f"📊 {len(tickers)}개 종목 기술적 분석 시작...")
+        """추출된 종목들 기술적 분석 + 포지션 예상"""
+        print(f"📊 {len(tickers)}개 종목 기술적 분석 + 포지션 예상 시작...")
         logging.info(f"{len(tickers)}개 종목 분석 시작")
         
         analysis_results = {}
@@ -255,20 +276,33 @@ class AlphaSeeker:
             if not technical_result:
                 continue
             
-            # 포지션 크기 계산
+            # 포지션 크기 계산 (기존)
             position_info = self.calculate_position_size(
                 ticker, 
                 technical_result.get('score', 5),
                 technical_result.get('confidence', 1.0)
             )
             
+            # 고급 포지션 예상 (조건부)
+            advanced_position = None
+            if self.position_estimator_available:
+                try:
+                    advanced_position = self.position_estimator.estimate_optimal_position(technical_result)
+                except Exception as e:
+                    logging.error(f"{ticker} 고급 포지션 예상 오류: {e}")
+            
             # 통합 결과
-            analysis_results[ticker] = {
+            result = {
                 **basic_info,
                 **technical_result,
                 **position_info,
                 'analysis_timestamp': datetime.now().isoformat()
             }
+            
+            if advanced_position:
+                result['advanced_position'] = advanced_position
+            
+            analysis_results[ticker] = result
             
             import time
             time.sleep(0.8)  # API 제한 방지
@@ -278,7 +312,7 @@ class AlphaSeeker:
         return analysis_results
     
     def run_morning_analysis(self):
-        """오전 분석 실행 (기존 로직 유지)"""
+        """오전 분석 실행"""
         print("🌅 오전 헤지펀드급 분석 시작")
         logging.info("오전 분석 시작")
         
@@ -286,28 +320,24 @@ class AlphaSeeker:
             # 1. AI 분석 및 종목 추출
             ai_result = self.get_perplexity_analysis()
             if not ai_result or not ai_result.get('extracted_tickers'):
-                error_msg = f"""
-🌅 Alpha Seeker Enhanced Final 오전 분석 실패
+                error_msg = f"""🌅 Alpha Seeker Enhanced Final 오전 분석 실패
 📅 {datetime.now().strftime('%Y-%m-%d %H:%M')} (KST)
 
 ❌ Perplexity AI 분석 실패 또는 종목 추출 실패
 🔄 다음 분석: 오후 23:30
-🤖 Alpha Seeker v4.3 Enhanced Final
-"""
+🤖 Alpha Seeker v4.3 Enhanced Final"""
                 self.telegram_bot.send_message(error_msg)
                 return False
             
             # 2. 추출된 종목들 기술적 분석
             stock_analysis = self.analyze_extracted_stocks(ai_result['extracted_tickers'])
             if not stock_analysis:
-                error_msg = f"""
-🌅 Alpha Seeker Enhanced Final 오전 분석
+                error_msg = f"""🌅 Alpha Seeker Enhanced Final 오전 분석
 📅 {datetime.now().strftime('%Y-%m-%d %H:%M')} (KST)
 
 ⚠️ 기술적 분석 실패
 🔄 다음 분석: 오후 23:30
-🤖 Alpha Seeker v4.3 Enhanced Final
-"""
+🤖 Alpha Seeker v4.3 Enhanced Final"""
                 self.telegram_bot.send_message(error_msg)
                 return False
             
@@ -336,153 +366,9 @@ class AlphaSeeker:
             logging.error(f"오전 분석 오류: {e}", exc_info=True)
             return False
     
-    def run_evening_recheck(self):
-        """저녁 재검토 실행 + 실시간 모니터링 시작"""
-        print("🌙 저녁 프리마켓 재검토 시작")
-        logging.info("저녁 재검토 시작")
-        
-        try:
-            # 1. 오전 데이터 로드
-            morning_data = self.data_manager.load_morning_data()
-            if not morning_data:
-                error_msg = f"""
-🌙 Alpha Seeker Enhanced Final 프리마켓 분석
-📅 {datetime.now().strftime('%Y-%m-%d %H:%M')} (KST)
-
-⚠️ 오전 데이터 없음
-🔄 다음 분석: 내일 06:07
-🤖 Alpha Seeker v4.3 Enhanced Final
-"""
-                self.telegram_bot.send_message(error_msg)
-                return False
-            
-            morning_stocks = morning_data.get('stock_analysis', {})
-            if not morning_stocks:
-                error_msg = f"""
-🌙 Alpha Seeker Enhanced Final 프리마켓 분석  
-📅 {datetime.now().strftime('%Y-%m-%d %H:%M')} (KST)
-
-⚠️ 오전 추천 종목 없음
-🔄 다음 분석: 내일 06:07
-🤖 Alpha Seeker v4.3 Enhanced Final
-"""
-                self.telegram_bot.send_message(error_msg)
-                return False
-            
-            # 2. 재검토 실행
-            evening_result = self.recheck_morning_picks(morning_stocks)
-            
-            # 3. 긴급 상황 체크
-            emergency_conditions = self.check_emergency_conditions(evening_result)
-            
-            if emergency_conditions:
-                emergency_msg = f"""
-🚨🚨🚨 Alpha Seeker 긴급 상황 🚨🚨🚨
-📅 {datetime.now().strftime('%Y-%m-%d %H:%M')} (KST)
-
-⛔ 긴급 사항:
-{chr(10).join(f'• {condition}' for condition in emergency_conditions)}
-
-🔧 즉시 확인 필요:
-• 시스템 로그 점검
-• API 키 상태 확인  
-• 네트워크 연결 상태
-• 데이터 소스 정상성
-• 포지션 긴급 재검토
-
-📞 담당자 즉시 대응 바랍니다.
-🤖 Alpha Seeker v4.3 Enhanced Final Emergency
-"""
-                # 긴급 알림 전송
-                self.telegram_bot.send_message(emergency_msg, emergency=True)
-            
-            # 4. 리스크 메트릭 계산
-            risk_metrics = self.calculate_risk_metrics(evening_result)
-            evening_result['risk_metrics'] = risk_metrics
-            
-            # 5. 결과 저장
-            self.data_manager.save_evening_data(evening_result)
-            
-            # 6. 리포트 생성 및 전송
-            report = self.evening_generator.generate(evening_result)
-            
-            # 위험도에 따른 알림 등급 결정
-            risk_level = risk_metrics.get('risk_level', '알 수 없음')
-            is_urgent = '고위험' in risk_level or '매우 고위험' in risk_level
-            
-            success = self.telegram_bot.send_message(report, urgent=is_urgent)
-            
-            # 7. 실시간 모니터링 시작
-            maintained = evening_result.get('maintained', [])
-            if success and maintained and not emergency_conditions:
-                print("🔍 실시간 위험 모니터링 시작...")
-                logging.info("실시간 모니터링 시작")
-                
-                self.realtime_monitor = RealtimeRiskMonitor(
-                    self.telegram_bot, 
-                    maintained  # 유지된 종목들만 모니터링
-                )
-                
-                monitor_started = self.realtime_monitor.start_monitoring()
-                
-                if monitor_started:
-                    # 모니터링 시작 알림
-                    monitor_msg = f"""
-🔍 Alpha Seeker 실시간 모니터링 활성화
-⏰ {datetime.now().strftime('%H:%M')} KST
-
-📊 모니터링 종목: {len(maintained)}개
-{', '.join(maintained)}
-
-🚨 긴급 알림 조건:
-• 급락 5% 이상 / 급등 10% 이상
-• RSI 극한 과매도/과매수 (20/80)
-• 거래량 3배 급증 / 50% 급감
-• VIX 30 이상 급등
-• 주요 지지선/저항선 이탈
-
-⚡ 24시간 자동 모니터링 시작
-🔄 알림 중복 방지: 30분 간격
-🤖 Alpha Seeker v4.3 Enhanced Final
-"""
-                    self.telegram_bot.send_message(monitor_msg)
-                    logging.info(f"실시간 모니터링 활성화: {maintained}")
-            
-            if success:
-                maintained_count = len(maintained)
-                removed_count = len(evening_result.get('removed', []))
-                failed_count = evening_result.get('failed_count', 0)
-                risk_level = risk_metrics.get('risk_level', '알 수 없음')
-                
-                print(f"🎉 저녁 재검토 완료: 유지 {maintained_count}개, 제외 {removed_count}개, 실패 {failed_count}개")
-                print(f"📊 리스크 수준: {risk_level}")
-                print(f"🔍 실시간 모니터링: {'활성화' if maintained_count > 0 else '대상 없음'}")
-                
-                logging.info(f"저녁 재검토 완료: 유지={maintained_count}, 제외={removed_count}, 실패={failed_count}, 리스크={risk_level}")
-            
-            # 부분 성공도 성공으로 처리
-            total_processed = len(evening_result.get('maintained', [])) + len(evening_result.get('removed', []))
-            return total_processed > 0
-            
-        except Exception as e:
-            print(f"❌ 저녁 재검토 오류: {e}")
-            logging.error(f"저녁 재검토 오류: {e}", exc_info=True)
-            
-            # 시스템 오류도 긴급 알림
-            error_msg = f"""
-🚨 Alpha Seeker 시스템 오류 🚨
-⏰ {datetime.now().strftime('%H:%M')} KST
-오류: {str(e)[:200]}
-
-즉시 시스템 점검 필요!
-🤖 Alpha Seeker v4.3 Enhanced Final
-"""
-            self.telegram_bot.send_message(error_msg, emergency=True)
-            return False
-    
     def recheck_morning_picks(self, morning_stocks):
-        """오전 종목들 재검토 (기존 로직 강화)"""
-        print(f"🔄 {len(morning_stocks)}개 종목 재검토 중...")
+        """오전 종목들 재검토 (포지션 예상 포함)"""
+        print(f"🔄 {len(morning_stocks)}개 종목 재검토 + 포지션 예상 중...")
         logging.info(f"{len(morning_stocks)}개 종목 재검토 시작")
         
         maintained = []
@@ -506,31 +392,44 @@ class AlphaSeeker:
                     import time
                     time.sleep(2)
             
-            # 분석 실패 시 폴백 처리 (더 정교함)
+            # 분석 실패 시 폴백 처리
             if not current_analysis:
                 failed_count += 1
                 morning_score = morning_data.get('score', 0)
                 morning_confidence = morning_data.get('confidence', 0.5)
                 
-                # 폴백 결정 로직 강화
                 fallback_threshold = 6.5 if morning_confidence > 0.7 else 7.0
                 
                 if morning_score >= fallback_threshold:
-                    print(f"🔄 {ticker} 오전 데이터 기반 유지 (점수: {morning_score}/10, 신뢰도: {morning_confidence:.1f})")
+                    print(f"🔄 {ticker} 오전 데이터 기반 유지 (점수: {morning_score}/10)")
                     maintained.append(ticker)
-                    recheck_results[ticker] = {
+                    
+                    # 오전 데이터로 포지션 예상 (조건부)
+                    fallback_position = None
+                    if self.position_estimator_available:
+                        try:
+                            fallback_position = self.position_estimator.estimate_optimal_position(morning_data)
+                        except Exception as e:
+                            logging.error(f"{ticker} 폴백 포지션 예상 오류: {e}")
+                    
+                    result = {
                         **morning_data,
                         'recheck_status': 'fallback_maintain',
                         'maintain': True,
                         'removal_reason': '',
-                        'fallback_reason': f'높은 오전 점수 ({morning_score}/10) + 신뢰도 ({morning_confidence:.1f})'
+                        'fallback_reason': f'높은 오전 점수 ({morning_score}/10)'
                     }
+                    
+                    if fallback_position:
+                        result['advanced_position'] = fallback_position
+                        
+                    recheck_results[ticker] = result
                 else:
                     print(f"❌ {ticker} 데이터 실패로 제거")
                     removed.append((ticker, "데이터 수집 실패"))
                 continue
             
-            # 정상 분석된 경우 기존 로직 수행
+            # 정상 분석된 경우
             morning_price = morning_data.get('current_price', 0)
             current_price = current_analysis.get('current_price', 0)
             
@@ -539,40 +438,49 @@ class AlphaSeeker:
             else:
                 gap_pct = 0
             
-            # 포지션 크기 재계산
+            # 포지션 크기 재계산 (기존)
             position_info = self.calculate_position_size(
                 ticker, 
                 current_analysis.get('score', 5),
                 current_analysis.get('confidence', 1.0)
             )
             
-            # 유지/제거 결정 (더 정교한 로직)
+            # 고급 포지션 예상 (조건부)
+            advanced_position = None
+            if self.position_estimator_available:
+                try:
+                    advanced_position = self.position_estimator.estimate_optimal_position(current_analysis)
+                except Exception as e:
+                    logging.error(f"{ticker} 고급 포지션 예상 오류: {e}")
+            
+            # 유지/제거 결정 로직
             should_maintain = True
             removal_reason = ""
             
-            # 1. 큰 갭 발생 (임계값 상향 조정)
-            if abs(gap_pct) > 8:  # 8% 이상으로 상향 조정
+            # 기존 결정 로직
+            if abs(gap_pct) > 8:
                 should_maintain = False
                 removal_reason = f"큰 갭 발생 ({gap_pct:+.1f}%)"
-            # 2. 기술적 점수 하락
             elif current_analysis.get('score', 0) < 4:
                 should_maintain = False
                 removal_reason = f"기술점수 하락 ({current_analysis.get('score', 0)}/10)"
-            # 3. 부정적 신호 증가
             elif any("데드크로스" in str(signal) for signal in current_analysis.get('signals', [])):
                 should_maintain = False
                 removal_reason = "부정적 기술적 신호"
-            # 4. RSI 극한 상황 (추가)
-            elif current_analysis.get('rsi', 50) < 15:  # RSI 15 이하 극한 과매도
+            elif current_analysis.get('rsi', 50) < 15:
                 should_maintain = False
                 removal_reason = f"RSI 극한 과매도 ({current_analysis.get('rsi', 0):.1f})"
-            # 5. 신뢰도 급락 (추가)
             elif current_analysis.get('confidence', 1.0) < 0.3:
                 should_maintain = False
                 removal_reason = f"신뢰도 급락 ({current_analysis.get('confidence', 0)*100:.0f}%)"
             
+            # 포지션 예상 기반 추가 검증 (조건부)
+            if advanced_position and advanced_position.get('position_recommendation') in ['STRONG_SELL', 'SELL']:
+                should_maintain = False
+                removal_reason = f"포지션 예상: {advanced_position.get('position_recommendation', 'SELL')}"
+            
             # 결과 기록
-            recheck_results[ticker] = {
+            result = {
                 **current_analysis,
                 **position_info,
                 'morning_price': morning_price,
@@ -581,6 +489,11 @@ class AlphaSeeker:
                 'removal_reason': removal_reason,
                 'recheck_status': 'success'
             }
+            
+            if advanced_position:
+                result['advanced_position'] = advanced_position
+                
+            recheck_results[ticker] = result
             
             if should_maintain:
                 maintained.append(ticker)
@@ -591,7 +504,7 @@ class AlphaSeeker:
         total_count = len(morning_stocks)
         success_rate = ((total_count - failed_count) / total_count * 100) if total_count > 0 else 0
         
-        print(f"✅ 재검토 완료: 성공률 {success_rate:.1f}% ({total_count-failed_count}/{total_count})")
+        print(f"✅ 재검토 + 포지션 예상 완료: 성공률 {success_rate:.1f}% ({total_count-failed_count}/{total_count})")
         logging.info(f"재검토 완료: 성공률={success_rate:.1f}%, 유지={len(maintained)}, 제외={len(removed)}, 실패={failed_count}")
         
         return {
@@ -604,8 +517,142 @@ class AlphaSeeker:
             'timestamp': datetime.now().isoformat()
         }
     
+    def run_evening_recheck(self):
+        """저녁 재검토 실행 + 실시간 모니터링 시작"""
+        print("🌙 저녁 프리마켓 재검토 시작")
+        logging.info("저녁 재검토 시작")
+        
+        try:
+            # 1. 오전 데이터 로드
+            morning_data = self.data_manager.load_morning_data()
+            if not morning_data:
+                error_msg = f"""🌙 Alpha Seeker Enhanced Final 프리마켓 분석
+📅 {datetime.now().strftime('%Y-%m-%d %H:%M')} (KST)
+
+⚠️ 오전 데이터 없음
+🔄 다음 분석: 내일 06:07
+🤖 Alpha Seeker v4.3 Enhanced Final"""
+                self.telegram_bot.send_message(error_msg)
+                return False
+            
+            morning_stocks = morning_data.get('stock_analysis', {})
+            if not morning_stocks:
+                error_msg = f"""🌙 Alpha Seeker Enhanced Final 프리마켓 분석  
+📅 {datetime.now().strftime('%Y-%m-%d %H:%M')} (KST)
+
+⚠️ 오전 추천 종목 없음
+🔄 다음 분석: 내일 06:07
+🤖 Alpha Seeker v4.3 Enhanced Final"""
+                self.telegram_bot.send_message(error_msg)
+                return False
+            
+            # 2. 재검토 실행
+            evening_result = self.recheck_morning_picks(morning_stocks)
+            
+            # 3. 긴급 상황 체크
+            emergency_conditions = self.check_emergency_conditions(evening_result)
+            
+            if emergency_conditions:
+                emergency_msg = f"""🚨🚨🚨 Alpha Seeker 긴급 상황 🚨🚨🚨
+📅 {datetime.now().strftime('%Y-%m-%d %H:%M')} (KST)
+
+⛔ 긴급 사항:
+{chr(10).join(f'• {condition}' for condition in emergency_conditions)}
+
+🔧 즉시 확인 필요:
+• 시스템 로그 점검
+• API 키 상태 확인  
+• 네트워크 연결 상태
+• 데이터 소스 정상성
+• 포지션 긴급 재검토
+
+📞 담당자 즉시 대응 바랍니다.
+🤖 Alpha Seeker v4.3 Enhanced Final Emergency"""
+                # 긴급 알림 전송
+                self.telegram_bot.send_message(emergency_msg, emergency=True)
+            
+            # 4. 리스크 메트릭 계산
+            risk_metrics = self.calculate_risk_metrics(evening_result)
+            evening_result['risk_metrics'] = risk_metrics
+            
+            # 5. 결과 저장
+            self.data_manager.save_evening_data(evening_result)
+            
+            # 6. 리포트 생성 및 전송
+            report = self.evening_generator.generate(evening_result)
+            
+            # 위험도에 따른 알림 등급 결정
+            risk_level = risk_metrics.get('risk_level', '알 수 없음')
+            is_urgent = '고위험' in risk_level or '매우 고위험' in risk_level
+            
+            success = self.telegram_bot.send_message(report, urgent=is_urgent)
+            
+            # 7. 실시간 모니터링 시작 (조건부)
+            maintained = evening_result.get('maintained', [])
+            if success and maintained and not emergency_conditions and self.realtime_monitor_available:
+                print("🔍 실시간 위험 모니터링 시작...")
+                logging.info("실시간 모니터링 시작")
+                
+                self.realtime_monitor = RealtimeRiskMonitor(
+                    self.telegram_bot, 
+                    maintained  # 유지된 종목들만 모니터링
+                )
+                
+                monitor_started = self.realtime_monitor.start_monitoring()
+                
+                if monitor_started:
+                    # 모니터링 시작 알림
+                    monitor_msg = f"""🔍 Alpha Seeker 실시간 모니터링 활성화
+⏰ {datetime.now().strftime('%H:%M')} KST
+
+📊 모니터링 종목: {len(maintained)}개
+{', '.join(maintained)}
+
+🚨 긴급 알림 조건:
+• 급락 5% 이상 / 급등 10% 이상
+• RSI 극한 과매도/과매수 (20/80)
+• 거래량 3배 급증 / 50% 급감
+• VIX 30 이상 급등
+• 주요 지지선/저항선 이탈
+
+⚡ 24시간 자동 모니터링 시작
+🔄 알림 중복 방지: 30분 간격
+🤖 Alpha Seeker v4.3 Enhanced Final"""
+                    self.telegram_bot.send_message(monitor_msg)
+                    logging.info(f"실시간 모니터링 활성화: {maintained}")
+            
+            if success:
+                maintained_count = len(maintained)
+                removed_count = len(evening_result.get('removed', []))
+                failed_count = evening_result.get('failed_count', 0)
+                risk_level = risk_metrics.get('risk_level', '알 수 없음')
+                
+                print(f"🎉 저녁 재검토 완료: 유지 {maintained_count}개, 제외 {removed_count}개, 실패 {failed_count}개")
+                print(f"📊 리스크 수준: {risk_level}")
+                print(f"🔍 실시간 모니터링: {'활성화' if maintained_count > 0 and self.realtime_monitor_available else '대상 없음'}")
+                
+                logging.info(f"저녁 재검토 완료: 유지={maintained_count}, 제외={removed_count}, 실패={failed_count}, 리스크={risk_level}")
+            
+            # 부분 성공도 성공으로 처리
+            total_processed = len(evening_result.get('maintained', [])) + len(evening_result.get('removed', []))
+            return total_processed > 0
+            
+        except Exception as e:
+            print(f"❌ 저녁 재검토 오류: {e}")
+            logging.error(f"저녁 재검토 오류: {e}", exc_info=True)
+            
+            # 시스템 오류도 긴급 알림
+            error_msg = f"""🚨 Alpha Seeker 시스템 오류 🚨
+⏰ {datetime.now().strftime('%H:%M')} KST
+오류: {str(e)[:200]}
+
+즉시 시스템 점검 필요!
+🤖 Alpha Seeker v4.3 Enhanced Final"""
+            self.telegram_bot.send_message(error_msg, emergency=True)
+            return False
+    
     def run_sunday_analysis(self):
-        """일요일 주간 분석 (기존 로직 유지)"""
+        """일요일 주간 분석"""
         print("📊 일요일 주간 전략 분석")
         logging.info("일요일 주간 분석 시작")
         
@@ -631,10 +678,12 @@ class AlphaSeeker:
     
     def stop_realtime_monitoring(self):
         """실시간 모니터링 중지"""
-        if self.realtime_monitor:
+        if self.realtime_monitor and self.realtime_monitor_available:
             self.realtime_monitor.stop_monitoring()
             self.realtime_monitor = None
             logging.info("실시간 모니터링 중지 완료")
+        else:
+            print("⚠️ 중지할 실시간 모니터링이 없습니다.")
     
     def run(self, analysis_type):
         """메인 실행 메서드"""
@@ -652,4 +701,4 @@ class AlphaSeeker:
             logging.info("정규 분석 시간이 아님")
             return False
 
-print("✅ AlphaSeeker Enhanced Final (포지션 관리 + 리스크 메트릭 + 실시간 모니터링)")
+print("✅ AlphaSeeker Enhanced Final + AdvancedPositionEstimator 통합 완료")
