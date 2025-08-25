@@ -1,97 +1,73 @@
 import os
-import requests
-from datetime import datetime
+import time
+import threading
+import logging
 from dotenv import load_dotenv
-
-load_dotenv()
-
-# config import 제거하고 직접 정의
-TELEGRAM_TIMEOUT = 15
-TELEGRAM_PARSE_MODE = 'Markdown'
-TELEGRAM_MAX_MESSAGE_LENGTH = 4096
 
 class TelegramBot:
     def __init__(self):
-        self.token = os.getenv('TELEGRAM_BOT_TOKEN')
+        load_dotenv()
+        self.bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
         self.chat_id = os.getenv('TELEGRAM_CHAT_ID')
-        self.timeout = TELEGRAM_TIMEOUT
-        self.parse_mode = TELEGRAM_PARSE_MODE
-        self.max_length = TELEGRAM_MAX_MESSAGE_LENGTH
+        self.emergency_chat_id = os.getenv('EMERGENCY_CHAT_ID')  # 긴급 알림용
         
-        # print 제거
-    
-    def send_message(self, message):
-        """텔레그램 메시지 전송"""
-        if not self.token or not self.chat_id:
-            return False
-            
+    def send_message(self, message, urgent=False, emergency=False):
+        """
+        메시지 전송 (긴급도별 구분)
+        - normal: 일반 알림
+        - urgent: 중요 알림 (⚠️ 표시)
+        - emergency: 긴급 알림 (여러 채널 + 반복)
+        """
         try:
-            messages = self._split_message(message)
+            import requests
             
-            success_count = 0
-            for i, msg in enumerate(messages):
-                success = self._send_single_message(msg, i + 1, len(messages))
-                if success:
-                    success_count += 1
-            
-            return success_count == len(messages)
-                
-        except Exception as e:
-            return False
-    
-    def _send_single_message(self, message, part_num=1, total_parts=1):
-        """단일 메시지 전송"""
-        try:
-            url = f"https://api.telegram.org/bot{self.token}/sendMessage"
-            
-            if total_parts > 1:
-                header = f"📄 **메시지 {part_num}/{total_parts}**\n\n"
-                message = header + message
-            
-            data = {
-                'chat_id': self.chat_id,
-                'text': message,
-                'parse_mode': self.parse_mode
-            }
-            
-            response = requests.post(url, data=data, timeout=self.timeout)
-            return response.status_code == 200
-                
-        except Exception as e:
-            return False
-    
-    def _split_message(self, message):
-        """긴 메시지를 여러 개로 분할"""
-        if len(message) <= self.max_length:
-            return [message]
-        
-        messages = []
-        current_message = ""
-        lines = message.split('\n')
-        
-        for line in lines:
-            if len(current_message + line + '\n') <= self.max_length:
-                current_message += line + '\n'
+            # 메시지 포맷팅
+            if emergency:
+                formatted_message = f"🚨🚨🚨 긴급 알림 🚨🚨🚨\n\n{message}"
+                target_chats = [self.chat_id, self.emergency_chat_id] if self.emergency_chat_id else [self.chat_id]
+            elif urgent:
+                formatted_message = f"⚠️ 중요 알림 ⚠️\n\n{message}"
+                target_chats = [self.chat_id]
             else:
-                if current_message.strip():
-                    messages.append(current_message.strip())
-                current_message = line + '\n'
-        
-        if current_message.strip():
-            messages.append(current_message.strip())
-        
-        return messages
+                formatted_message = message
+                target_chats = [self.chat_id]
+            
+            # 여러 채널에 전송
+            success_count = 0
+            for chat_id in target_chats:
+                if chat_id:
+                    url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+                    payload = {
+                        'chat_id': chat_id,
+                        'text': formatted_message,
+                        'parse_mode': 'HTML'
+                    }
+                    response = requests.post(url, data=payload, timeout=30)
+                    if response.status_code == 200:
+                        success_count += 1
+                    else:
+                        logging.error(f"텔레그램 전송 실패: {response.status_code} - {response.text}")
+            
+            # 긴급 알림의 경우 후속 알림 스케줄
+            if emergency and success_count > 0:
+                self._schedule_emergency_followup(formatted_message)
+            
+            logging.info(f"텔레그램 전송 완료: {success_count}/{len(target_chats)} 채널")
+            return success_count > 0
+            
+        except Exception as e:
+            print(f"❌ 텔레그램 전송 오류: {e}")
+            logging.error(f"텔레그램 전송 오류: {e}")
+            return False
     
-    def send_test_message(self):
-        """테스트 메시지 전송"""
-        test_msg = f"""
-🧪 **Alpha Seeker 테스트 메시지**
-📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-✅ 텔레그램 봇 연결 정상
-🤖 Alpha Seeker v4.3 시스템 준비 완료
-"""
+    def _schedule_emergency_followup(self, message):
+        """긴급 알림 후속 처리"""
+        def followup():
+            time.sleep(300)  # 5분 후
+            followup_msg = f"📢 5분 전 긴급 알림 재확인 필요\n\n{message[:200]}..."
+            self.send_message(followup_msg, urgent=True)
         
-        return self.send_message(test_msg)
+        # 백그라운드로 후속 알림 스케줄
+        threading.Thread(target=followup, daemon=True).start()
 
-# print 문 제거!
+print("✅ TelegramBot Enhanced (긴급 알림 시스템)")

@@ -40,7 +40,6 @@ class DataManager:
             with open(self.morning_picks_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
-            # 문법 오류 수정: 조건문 완성
             if not data or 'stock_analysis' not in data:
                 return None
                 

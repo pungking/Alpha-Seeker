@@ -1,31 +1,42 @@
-name: Alpha Seeker v4.3 안정화 자동화
+name: Alpha Seeker v4.3 Enhanced Final Analysis
 
 on:
   schedule:
-    # 매일 오전 6시 7분 (한국시간)
-    - cron: '7 21 * * 0-4'  
-    # 매일 오후 10시 13분 (한국시간)
-    - cron: '13 13 * * 1-5'
-    # 매주 일요일 오후 6시 23분 (한국시간)
-    - cron: '23 9 * * 0'
+    - cron: '7 21 * * 0-4'    # 06:07 KST (일-목)
+    - cron: '30 14 * * 0-4'   # 23:30 KST (일-목) - 개선된 시간
+    - cron: '23 9 * * 0'      # 18:23 KST (일요일)
   workflow_dispatch:
 
 jobs:
-  alpha_seeker:
+  analyze:
     runs-on: ubuntu-latest
+    timeout-minutes: 600  # 10시간 (실시간 모니터링 포함)
     steps:
     - uses: actions/checkout@v4
-    - name: Python 설정
+    
+    - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.11'
-    - name: 의존성 설치 (안정화)
+        
+    - name: Install dependencies
       run: |
-        pip install --upgrade pip
+        python -m pip install --upgrade pip
         pip install -r requirements.txt
-    - name: Alpha Seeker v4.3 안정화 실행
+        
+    - name: Run Alpha Seeker Enhanced Final Analysis
       env:
+        PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
+        EMERGENCY_CHAT_ID: ${{ secrets.EMERGENCY_CHAT_ID }}
       run: python main.py
+      
+    - name: Upload logs
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: alpha-seeker-logs
+        path: |
+          alpha_seeker.log
+          data/

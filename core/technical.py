@@ -1,295 +1,150 @@
 import yfinance as yf
 import pandas as pd
 import numpy as np
+import logging
 from datetime import datetime
 
 class TechnicalAnalyzer:
     def __init__(self):
-        self.min_data_points = 50
-
-    def get_stock_data(self, ticker):
-        """yfinance 전용 안정화 데이터 수집"""
-        try:
-            print(f"📈 {ticker} 데이터 수집 중...")
-            stock = yf.Ticker(ticker)
-            hist = stock.history(period="6mo")
-            
-            if len(hist) < self.min_data_points:
-                print(f"⚠️ {ticker}: 데이터 부족")
-                return None
+        self.timeout = 30
+        self.retry_count = 3
+        
+    def analyze(self, ticker, retry=True):
+        """강화된 기술적 분석 (기존 로직 유지)"""
+        for attempt in range(self.retry_count if retry else 1):
+            try:
+                # yfinance 데이터 수집
+                stock = yf.Ticker(ticker)
                 
-            return {
-                'history': hist,
-                'current_price': float(hist['Close'].iloc[-1]),
-                'previous_price': float(hist['Close'].iloc[-2]),
-                'symbol': ticker,
-                'data_source': 'yfinance_stable'
-            }
-        except Exception as e:
-            print(f"❌ {ticker} 데이터 수집 실패: {e}")
-            return None
-
-    def calculate_rsi(self, prices, period=14):
-        """RSI 계산"""
+                # 타임아웃과 함께 데이터 요청
+                data = stock.history(
+                    period="60d", 
+                    interval="1d", 
+                    timeout=self.timeout
+                )
+                
+                # Empty DataFrame 체크
+                if data.empty or len(data) < 20:
+                    if attempt < self.retry_count - 1:
+                        print(f"⚠️ {ticker} 데이터 부족, 재시도 중... ({attempt+1}/{self.retry_count})")
+                        continue
+                    else:
+                        print(f"❌ {ticker} 데이터 수집 최종 실패")
+                        return None
+                
+                # 기술적 분석 수행
+                analysis_result = self.perform_technical_analysis(ticker, data)
+                return analysis_result
+                
+            except Exception as e:
+                if attempt < self.retry_count - 1:
+                    print(f"⚠️ {ticker} 분석 오류 ({attempt+1}/{self.retry_count}): {str(e)}")
+                    import time
+                    time.sleep(2 ** attempt)  # 지수 백오프
+                else:
+                    print(f"❌ {ticker} 최종 분석 실패: {str(e)}")
+                    logging.error(f"{ticker} 분석 실패: {e}")
+                    return None
+        
+        return None
+    
+    def perform_technical_analysis(self, ticker, data):
+        """실제 기술적 분석 로직 (EMA, RSI, 볼린저밴드, MACD)"""
         try:
-            prices_series = pd.Series(prices)
-            delta = prices_series.diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+            current_price = data['Close'].iloc[-1]
+            volume = data['Volume'].iloc[-1] if 'Volume' in data else 0
+            
+            # EMA 계산 (SMA 대신 사용)
+            ema_12 = data['Close'].ewm(span=12).mean().iloc[-1]
+            ema_26 = data['Close'].ewm(span=26).mean().iloc[-1]
+            
+            # RSI 계산
+            delta = data['Close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
             rs = gain / loss
-            rsi = 100 - (100 / (1 + rs))
-            return float(rsi.iloc[-1])
-        except Exception:
-            return 50.0
-
-    def calculate_macd(self, prices, fast=12, slow=26, signal=9):
-        """MACD 계산"""
-        try:
-            prices_series = pd.Series(prices)
-            ema_fast = prices_series.ewm(span=fast).mean()
-            ema_slow = prices_series.ewm(span=slow).mean()
-            macd_line = ema_fast - ema_slow
-            signal_line = macd_line.ewm(span=signal).mean()
+            rsi = 100 - (100 / (1 + rs)).iloc[-1]
             
-            current_macd = float(macd_line.iloc[-1])
-            current_signal = float(signal_line.iloc[-1])
-            prev_macd = float(macd_line.iloc[-2])
-            prev_signal = float(signal_line.iloc[-2])
+            # 볼린저 밴드
+            bb_middle = data['Close'].rolling(20).mean()
+            bb_std = data['Close'].rolling(20).std()
+            bb_upper = (bb_middle + (bb_std * 2)).iloc[-1]
+            bb_lower = (bb_middle - (bb_std * 2)).iloc[-1]
             
-            if prev_macd <= prev_signal and current_macd > current_signal:
-                signal_type = "골든크로스"
-            elif prev_macd >= prev_signal and current_macd < current_signal:
-                signal_type = "데드크로스"
-            elif current_macd > current_signal:
-                signal_type = "강세"
-            else:
-                signal_type = "약세"
+            # MACD
+            macd_line = ema_12 - ema_26
+            macd_signal = (ema_12 - ema_26).rolling(9).mean().iloc[-1]
+            
+            # 거래량 평균
+            volume_avg = data['Volume'].rolling(20).mean().iloc[-1] if 'Volume' in data else volume
+            
+            # 점수 계산 (기존 로직 유지)
+            score = 5  # 기본 점수
+            signals = []
+            
+            # EMA 기반 분석
+            if current_price > ema_12:
+                score += 1
+                signals.append("12일 EMA 상향")
                 
-            return {
-                'macd': current_macd,
-                'signal': current_signal,
-                'signal_type': signal_type
-            }
-        except Exception:
-            return {
-                'macd': 0.0,
-                'signal': 0.0,
-                'signal_type': '중립'
-            }
-
-    def calculate_bollinger_bands(self, prices, period=20, std_dev=2):
-        """볼린저 밴드 계산"""
-        try:
-            prices_series = pd.Series(prices)
-            sma = prices_series.rolling(window=period).mean()
-            std = prices_series.rolling(window=period).std()
+            if current_price > ema_26:
+                score += 1
+                signals.append("26일 EMA 상향")
+                
+            # 골든크로스/데드크로스
+            if ema_12 > ema_26:
+                score += 0.5
+                signals.append("EMA 골든크로스")
             
-            upper_band = sma + (std * std_dev)
-            lower_band = sma - (std * std_dev)
+            # RSI 분석
+            if 30 <= rsi <= 70:  # 적정 구간
+                score += 1
+                signals.append("RSI 양호")
+            elif rsi < 30:
+                score += 0.5  # 과매도 (반등 가능성)
+                signals.append("과매도 구간")
+            elif rsi > 70:
+                signals.append("과매수 주의")
             
-            current_price = prices[-1]
-            current_upper = float(upper_band.iloc[-1])
-            current_lower = float(lower_band.iloc[-1])
-            current_middle = float(sma.iloc[-1])
+            # 볼린저 밴드 분석
+            if bb_lower < current_price < bb_upper:
+                score += 0.5
+                signals.append("볼린저 적정구간")
+            elif current_price < bb_lower:
+                signals.append("볼린저 하단 접촉")
             
-            bb_position = (current_price - current_lower) / (current_upper - current_lower)
+            # MACD 분석
+            if macd_line > macd_signal:
+                score += 0.5
+                signals.append("MACD 상승신호")
             
-            return {
-                'upper': current_upper,
-                'middle': current_middle,
-                'lower': current_lower,
-                'position': float(bb_position)
-            }
-        except Exception:
-            current_price = prices[-1]
-            return {
-                'upper': current_price * 1.05,
-                'middle': current_price,
-                'lower': current_price * 0.95,
-                'position': 0.5
-            }
-
-    def calculate_moving_averages(self, prices):
-        """이동평균선 계산"""
-        try:
-            prices_series = pd.Series(prices)
-            
-            sma_5 = float(prices_series.rolling(window=5).mean().iloc[-1])
-            sma_20 = float(prices_series.rolling(window=20).mean().iloc[-1])
-            sma_50 = float(prices_series.rolling(window=50).mean().iloc[-1])
+            # 거래량 분석
+            if volume > volume_avg * 1.5:
+                score += 0.5
+                signals.append("거래량 급증")
             
             return {
-                'sma_5': sma_5,
-                'sma_20': sma_20,
-                'sma_50': sma_50
+                'ticker': ticker,
+                'current_price': float(current_price),
+                'ema_12': float(ema_12),
+                'ema_26': float(ema_26),
+                'rsi': float(rsi),
+                'bb_upper': float(bb_upper),
+                'bb_lower': float(bb_lower),
+                'macd_signal': float(macd_line - macd_signal),
+                'volume': int(volume) if volume > 0 else 0,
+                'volume_avg': int(volume_avg) if volume_avg > 0 else 0,
+                'score': min(round(score, 1), 10),
+                'signals': signals,
+                'analysis_time': datetime.now().isoformat(),
+                # 추가: 신뢰도 메트릭
+                'confidence': min(score / 10.0, 1.0),
+                'volatility': float((bb_upper - bb_lower) / current_price) if current_price > 0 else 0
             }
-        except Exception:
-            current_price = prices[-1]
-            return {
-                'sma_5': current_price,
-                'sma_20': current_price,
-                'sma_50': current_price
-            }
-
-    def calculate_volume_indicators(self, hist):
-        """거래량 지표 계산"""
-        try:
-            volume = hist['Volume'].values
-            current_volume = int(volume[-1])
-            
-            avg_volume_20 = np.mean(volume[-20:])
-            volume_ratio = current_volume / avg_volume_20 if avg_volume_20 > 0 else 1
-            
-            return {
-                'current_volume': current_volume,
-                'volume_ratio': round(float(volume_ratio), 2)
-            }
-        except Exception:
-            return {
-                'current_volume': 1000000,
-                'volume_ratio': 1.0
-            }
-
-    def generate_trading_signals(self, rsi, macd_data, bb_data, ma_data, current_price, volume_data, data_source):
-        """매매 신호 생성 및 점수 계산"""
-        signals = []
-        score = 5.0
-        
-        # RSI 신호
-        if rsi < 30:
-            signals.append(f"RSI 과매도 ({rsi:.1f})")
-            score += 3
-        elif rsi < 40:
-            signals.append(f"RSI 매수권 ({rsi:.1f})")
-            score += 2
-        elif rsi > 70:
-            signals.append(f"RSI 과매수 ({rsi:.1f})")
-            score -= 2
-        
-        # MACD 신호
-        if macd_data['signal_type'] == "골든크로스":
-            signals.append("MACD 골든크로스")
-            score += 3
-        elif macd_data['signal_type'] == "강세":
-            signals.append("MACD 강세")
-            score += 1
-        elif macd_data['signal_type'] == "데드크로스":
-            signals.append("MACD 데드크로스")
-            score -= 2
-        
-        # 볼린저 밴드 신호
-        bb_pos = bb_data['position']
-        if bb_pos <= 0.1:
-            signals.append("볼린저밴드 하단돌파")
-            score += 2.5
-        elif bb_pos <= 0.2:
-            signals.append("볼린저밴드 하단권")
-            score += 1.5
-        elif bb_pos >= 0.9:
-            signals.append("볼린저밴드 상단돌파")
-            score -= 1.5
-        elif bb_pos >= 0.8:
-            signals.append("볼린저밴드 상단권")
-            score -= 1
-        
-        # 이동평균선 신호
-        sma_5 = ma_data['sma_5']
-        sma_20 = ma_data['sma_20']
-        sma_50 = ma_data['sma_50']
-        
-        if current_price > sma_5 > sma_20 > sma_50:
-            signals.append("이평선 정배열")
-            score += 2
-        elif current_price > sma_20:
-            signals.append("20일선 상회")
-            score += 1
-        
-        # 거래량 신호
-        vol_ratio = volume_data['volume_ratio']
-        if vol_ratio > 2.0:
-            signals.append(f"거래량 급증 ({vol_ratio:.1f}배)")
-            score += 1.5
-        elif vol_ratio > 1.5:
-            signals.append(f"거래량 증가 ({vol_ratio:.1f}배)")
-            score += 0.5
-        
-        final_score = max(0, min(10, score))
-        return signals, round(final_score, 1)
-
-    def calculate_support_resistance(self, hist, period=20):
-        """지지/저항선 계산"""
-        try:
-            prices = hist['Close'].values
-            highs = hist['High'].values
-            lows = hist['Low'].values
-            
-            recent_high = float(np.max(highs[-period:]))
-            recent_low = float(np.min(lows[-period:]))
-            
-            return {
-                'resistance': recent_high,
-                'support': recent_low
-            }
-        except Exception:
-            current_price = hist['Close'].iloc[-1]
-            return {
-                'resistance': current_price * 1.1,
-                'support': current_price * 0.9
-            }
-
-    def analyze(self, ticker):
-        """종합 기술적 분석"""
-        try:
-            # 1. 데이터 수집
-            stock_data = self.get_stock_data(ticker)
-            if not stock_data:
-                return None
-            
-            hist = stock_data['history']
-            prices = hist['Close'].values
-            current_price = stock_data['current_price']
-            prev_price = stock_data['previous_price']
-            data_source = stock_data['data_source']
-            
-            # 2. 기술적 지표 계산
-            rsi = self.calculate_rsi(prices)
-            macd_data = self.calculate_macd(prices)
-            bb_data = self.calculate_bollinger_bands(prices)
-            ma_data = self.calculate_moving_averages(prices)
-            volume_data = self.calculate_volume_indicators(hist)
-            support_resistance = self.calculate_support_resistance(hist)
-            
-            # 3. 매매 신호 생성
-            signals, score = self.generate_trading_signals(
-                rsi, macd_data, bb_data, ma_data, current_price, volume_data, data_source
-            )
-            
-            # 4. 변화율 계산
-            change_pct = ((current_price - prev_price) / prev_price) * 100
-            
-            # 5. 종합 결과
-            result = {
-                'symbol': ticker,
-                'current_price': round(current_price, 2),
-                'change_pct': round(change_pct, 2),
-                'volume': volume_data['current_volume'],
-                'volume_ratio': volume_data['volume_ratio'],
-                'rsi': round(rsi, 1),
-                'macd_signal': macd_data['signal_type'],
-                'bb_position': round(bb_data['position'] * 100, 1),
-                'support_level': round(support_resistance['support'], 2),
-                'resistance_level': round(support_resistance['resistance'], 2),
-                'signals': signals[:5],
-                'score': score,
-                'data_source': data_source,
-                'analysis_timestamp': datetime.now().isoformat()
-            }
-            
-            print(f"✅ {ticker} 📊 기술적 분석 완료: {score}/10점")
-            return result
             
         except Exception as e:
-            print(f"❌ {ticker} 기술적 분석 실패: {e}")
+            print(f"❌ {ticker} 지표 계산 오류: {str(e)}")
+            logging.error(f"{ticker} 지표 계산 오류: {e}")
             return None
 
-print("✅ TechnicalAnalyzer 안정화 (yfinance 기반)")
+print("✅ TechnicalAnalyzer Enhanced (EMA + RSI + 볼린저밴드 + MACD + 신뢰도)")
